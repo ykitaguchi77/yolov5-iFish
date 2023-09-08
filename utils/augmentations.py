@@ -36,7 +36,7 @@ class Albumentations:
                 A.CLAHE(p=0.01),
                 A.RandomBrightnessContrast(p=0.0),
                 A.RandomGamma(p=0.0),
-                A.ImageCompression(quality_lower=75, p=0.0)
+                A.ImageCompression(quality_lower=75, p=0.0),
                 FishAugment(distortion_range=(0, 0.3), p=0.5)  # Add modified FishEye Augmentation
                 ]  # transforms
             self.transform = A.Compose(T, bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
