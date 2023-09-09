@@ -115,8 +115,6 @@ class FishEyeEffect(DualTransform):
         y_min_new = (y_min_new + 1)  / 2
         y_max_new = (y_max_new + 1)  / 2
 
-        print(x_min_new, y_min_new, x_max_new, y_max_new)
-
         return x_min_new, y_min_new, x_max_new, y_max_new
 
 
