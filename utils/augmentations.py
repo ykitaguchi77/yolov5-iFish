@@ -4,6 +4,7 @@ Image augmentation functions
 """
 
 import math
+from math import sqrt
 import random
 
 import cv2
