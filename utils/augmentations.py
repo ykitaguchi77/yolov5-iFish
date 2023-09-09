@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import torchvision.transforms as T
 import torchvision.transforms.functional as TF
+from albumentations import DualTransform
 
 from utils.general import LOGGER, check_version, colorstr, resample_segments, segment2box, xywhn2xyxy
 from utils.metrics import bbox_ioa
@@ -37,7 +38,7 @@ class Albumentations:
                 A.RandomBrightnessContrast(p=0.0),
                 A.RandomGamma(p=0.0),
                 A.ImageCompression(quality_lower=75, p=0.0),
-                FishAugment(distortion_range=(0, 0.3), p=0.5)  # Add modified FishEye Augmentation
+                FishEyeEffect(p=0.5)  # Add modified FishEye Augmentation
                 ]  # transforms
             self.transform = A.Compose(T, bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
 
@@ -53,48 +54,78 @@ class Albumentations:
             im, labels = new['image'], np.array([[c, *b] for c, b in zip(new['class_labels'], new['bboxes'])])
         return im, labels
 
-class FishAugment:
-    def __init__(self, distortion_range=(0, 0.3), p=0.5):
-        self.distortion_range = distortion_range
-        self.p = p
+class FishEyeEffect(DualTransform):
+    def __init__(self, always_apply=False, p=0.5):
+        super(FishEyeEffect, self).__init__(always_apply, p)
+        self.image_shape = None  # Initialize the instance variable to store image shape
 
-    def apply(self, img, **params):
-        if random.random() < self.p:
-            distortion_coefficient = random.uniform(*self.distortion_range)
-            return fish(img, distortion_coefficient)
-        return img
 
-    def get_transform_init_args_names(self):
-        return ("distortion_range", "p")
+    def get_fish_xn_yn(self, source_x, source_y, radius, distortion):
+        if 1 - distortion*(radius**2) == 0:
+            return source_x, source_y
+        return source_x / (1 - (distortion*(radius**2))), source_y / (1 - (distortion*(radius**2)))
 
-def fish(img, distortion_coefficient=0.5):
-    """
-    Apply fish-eye effect to the given image.
-    :param img: Input image as a numpy array
-    :param distortion_coefficient: The amount of distortion to apply.
-    :return: numpy.ndarray - the image with applied effect.
-    """
-    w, h = img.shape[0], img.shape[1]
-    if len(img.shape) == 2:
-        bw_channel = np.copy(img)
-        img = np.dstack((img, bw_channel))
-        img = np.dstack((img, bw_channel))
-    if len(img.shape) == 3 and img.shape[2] == 3:
-        img = np.dstack((img, np.full((w, h), 255)))
+    def get_original_xn_yn(self, dest_x, dest_y, radius, distortion):
+        return dest_x * (1 - distortion * (radius**2)), dest_y * (1 - distortion * (radius**2))
 
-    dstimg = np.zeros_like(img)
-    w, h = float(w), float(h)
 
-    for x in range(len(dstimg)):
-        for y in range(len(dstimg[x])):
-            xnd, ynd = float((2*x - w)/w), float((2*y - h)/h)
-            rd = sqrt(xnd**2 + ynd**2)
-            xdu, ydu = get_fish_xn_yn(xnd, ynd, rd, distortion_coefficient)
-            xu, yu = int(((xdu + 1)*w)/2), int(((ydu + 1)*h)/2)
-            if 0 <= xu and xu < img.shape[0] and 0 <= yu and yu < img.shape[1]:
-                dstimg[x][y] = img[xu][yu]
+    def apply(self, img, distortion=0, **params):
+        self.image_shape = img.shape  # set image shape here
+        # your fish-eye effect implementation here
+        dstimg = np.zeros_like(img)
+        w, h = float(img.shape[0]), float(img.shape[1])
+        for x in range(len(dstimg)):
+            for y in range(len(dstimg[x])):
+                xnd, ynd = float((2*x - w)/w), float((2*y - h)/h)
+                rd = sqrt(xnd**2 + ynd**2)
+                xdu, ydu = self.get_fish_xn_yn(xnd, ynd, rd, distortion)
+                xu, yu = int(((xdu + 1)*w)/2), int(((ydu + 1)*h)/2)
+                if 0 <= xu < img.shape[0] and 0 <= yu < img.shape[1]:
+                    dstimg[x][y] = img[xu][yu]
+        return dstimg
 
-    return dstimg.astype(np.uint8)
+    def apply_to_bbox(self, bbox, distortion=0, **params):
+        img_h, img_w = self.image_shape[:2]  # Use the stored image shape
+
+        # YOLO形式から4つの角の座標を取得
+        x_min, y_min, x_max, y_max = bbox
+
+        # 4つの角の座標を正規化
+        corners = [(x_min, y_min), 
+                  (x_max, y_min), 
+                  (x_min, y_max), 
+                  (x_max, y_max)]
+
+        # 正規化された座標を魚眼変換用に変換
+        corners = [(2*x - 1, 2*y - 1) for x, y in corners]
+        
+        print("Transformed corners:", corners)
+
+        # 各角をFishEyeで逆変換
+        distorted_corners = [self.get_original_xn_yn(x, y, sqrt(x**2 + y**2), distortion) for x, y in corners]
+        
+        print("Distorted corners:", distorted_corners)
+
+        # 逆変換された点を含む最小の長方形を求める
+        x_min_new = min(x for x, y in distorted_corners)
+        x_max_new = max(x for x, y in distorted_corners)
+        y_min_new = min(y for x, y in distorted_corners)
+        y_max_new = max(y for x, y in distorted_corners)
+
+        # 魚眼逆変換後の座標を画像座標系に戻す
+        x_min_new = (x_min_new + 1) / 2
+        x_max_new = (x_max_new + 1) / 2
+        y_min_new = (y_min_new + 1)  / 2
+        y_max_new = (y_max_new + 1)  / 2
+
+        print(x_min_new, y_min_new, x_max_new, y_max_new)
+
+        return x_min_new, y_min_new, x_max_new, y_max_new
+
+
+    def get_params(self):
+        # Random distortion coefficient between 0 and 0.3
+        return {'distortion': random.uniform(0, 0.3)}
 
 def normalize(x, mean=IMAGENET_MEAN, std=IMAGENET_STD, inplace=False):
     # Denormalize RGB images x per ImageNet stats in BCHW format, i.e. = (x - mean) / std
