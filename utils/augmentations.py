@@ -100,13 +100,9 @@ class FishEyeEffect(DualTransform):
         # 正規化された座標を魚眼変換用に変換
         corners = [(2*x - 1, 2*y - 1) for x, y in corners]
         
-        print("Transformed corners:", corners)
-
         # 各角をFishEyeで逆変換
         distorted_corners = [self.get_original_xn_yn(x, y, sqrt(x**2 + y**2), distortion) for x, y in corners]
         
-        print("Distorted corners:", distorted_corners)
-
         # 逆変換された点を含む最小の長方形を求める
         x_min_new = min(x for x, y in distorted_corners)
         x_max_new = max(x for x, y in distorted_corners)
